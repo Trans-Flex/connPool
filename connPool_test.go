@@ -36,13 +36,13 @@ func startMockServer(t *testing.T) (net.Listener, func()) {
 	}
 }
 
-func TestConnPool(t *testing.T) {
+func TestConnPool_Concurrency(t *testing.T) {
 	// 1. 启动 Mock Server
 	_, cleanup := startMockServer(t)
 	defer cleanup()
 
 	// 2. 初始化连接池：maxIdle=2，则 maxActive=4
-	pool := NewConnPool(2)
+	pool := NewConnPool(2, 60*time.Second)
 
 	// 3. 并发测试：10 个 goroutine 抢 4 个配额
 	concurrency := 10
@@ -82,4 +82,45 @@ func TestConnPool(t *testing.T) {
 	if pool.totalConns != 2 {
 		t.Errorf("测试结束后 totalConns 预期为 2，实际为 %d", pool.totalConns)
 	}
+}
+
+// TestConnPool_LazyCleanup 懒清理测试
+func TestConnPool_LazyCleanup(t *testing.T) {
+	_, cleanup := startMockServer(t)
+	defer cleanup()
+
+	// 1. 设置极短的超时时间：100ms
+	pool := NewConnPool(2, 100*time.Millisecond)
+
+	// 2. 拿一个连接，马上还回去
+	conn1, err := pool.Get()
+	if err != nil {
+		t.Fatalf("首次获取失败: %v", err)
+	}
+	pool.Put(conn1)
+
+	if pool.totalConns != 1 {
+		t.Errorf("预期 totalConns 为 1，实际为 %d", pool.totalConns)
+	}
+
+	// 3. 睡眠 150ms，等待连接过期
+	fmt.Println("等待 150ms 让连接过期...")
+	time.Sleep(150 * time.Millisecond)
+
+	// 4. 再次获取，期望：懒清理机制生效，丢弃旧连接并新建
+	conn2, err := pool.Get()
+	if err != nil {
+		t.Fatalf("二次获取失败: %v", err)
+	}
+	fmt.Println("二次获取成功，说明过期连接被清理")
+
+	// 5. 验证状态：过期连接被销毁，新建了一个，所以总数还是 1，通道空闲为 0
+	if pool.totalConns != 1 {
+		t.Errorf("预期 totalConns 为 1，实际为 %d", pool.totalConns)
+	}
+	if len(pool.idleConns) != 0 {
+		t.Errorf("预期 idleConns 为 0，实际为 %d", len(pool.idleConns))
+	}
+
+	pool.Put(conn2)
 }

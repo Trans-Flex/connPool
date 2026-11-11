@@ -7,39 +7,41 @@ import (
 	"time"
 )
 
+type idleConn struct {
+	conn     net.Conn
+	lastUsed time.Time // 记录放回池子的时间
+}
+
 type ConnPool struct {
-	idleConns  chan net.Conn
+	idleConns  chan *idleConn
 	totalConns int32
 	maxActive  int32
 	mu         sync.Mutex
+
+	idleTimeout time.Duration
 }
 
-func NewConnPool(maxIdle int) *ConnPool {
+func NewConnPool(maxIdle int, idleTimeout time.Duration) *ConnPool {
 	return &ConnPool{
-		idleConns:  make(chan net.Conn, maxIdle),
-		totalConns: 0,
-		maxActive:  int32(2 * maxIdle),
+		idleConns:   make(chan *idleConn, maxIdle),
+		totalConns:  0,
+		maxActive:   int32(2 * maxIdle),
+		idleTimeout: idleTimeout,
 	}
 }
 
 func (p *ConnPool) Get() (net.Conn, error) {
 	for {
 		select {
-		case conn := <-p.idleConns:
-			if p.isAlive(conn) {
-				return conn, nil
+		case idle := <-p.idleConns:
+			if p.check(idle) {
+				return idle.conn, nil
 			}
-			conn.Close()
-			p.mu.Lock()
-			p.totalConns--
-			p.mu.Unlock()
+			p.destroyConn(idle.conn)
 			continue
 		default:
-			fmt.Println("池子空了，新建连接")
 			p.mu.Lock()
-			if p.totalConns >= p.maxActive {
-				p.mu.Unlock()
-			} else {
+			if p.totalConns < p.maxActive {
 				p.totalConns++
 				p.mu.Unlock()
 
@@ -52,17 +54,34 @@ func (p *ConnPool) Get() (net.Conn, error) {
 				}
 				return conn, nil
 			}
+			p.mu.Unlock()
 		}
 
-		conn := <-p.idleConns
+		idle := <-p.idleConns
 
-		if p.isAlive(conn) {
-			return conn, nil
+		if p.check(idle) {
+			return idle.conn, nil
 		}
+		p.destroyConn(idle.conn)
+		continue
+	}
+}
+
+func (p *ConnPool) Put(conn net.Conn) {
+	if conn == nil {
+		return
+	}
+	select {
+	case p.idleConns <- &idleConn{conn: conn, lastUsed: time.Now()}:
+		// 塞进去了，安全归还
+		fmt.Println("连接归还成功")
+	default:
+		// 通道满了，说明空闲连接太多，直接销毁
 		conn.Close()
 		p.mu.Lock()
 		p.totalConns--
 		p.mu.Unlock()
+		fmt.Println("池子满了，多余连接已销毁")
 	}
 }
 
@@ -79,20 +98,19 @@ func (p *ConnPool) isAlive(conn net.Conn) bool {
 	return false
 }
 
-func (p *ConnPool) Put(conn net.Conn) {
-	if conn == nil {
-		return
+func (p *ConnPool) destroyConn(conn net.Conn) {
+	conn.Close()
+	p.mu.Lock()
+	p.totalConns--
+	p.mu.Unlock()
+}
+
+func (p *ConnPool) check(idle *idleConn) bool {
+	if time.Since(idle.lastUsed) > p.idleTimeout {
+		return false
 	}
-	select {
-	case p.idleConns <- conn:
-		// 塞进去了，安全归还
-		fmt.Println("连接归还成功")
-	default:
-		// 通道满了，说明空闲连接太多，直接销毁
-		conn.Close()
-		p.mu.Lock()
-		p.totalConns--
-		p.mu.Unlock()
-		fmt.Println("池子满了，多余连接已销毁")
+	if !p.isAlive(idle.conn) {
+		return false
 	}
+	return true
 }
