@@ -42,7 +42,9 @@ func TestConnPool_Concurrency(t *testing.T) {
 	defer cleanup()
 
 	// 2. 初始化连接池：maxIdle=2，则 maxActive=4
-	pool := NewConnPool(2, 60*time.Second)
+	pool := NewConnPool(2, 60*time.Second, func() (net.Conn, error) {
+		return net.Dial("tcp", "127.0.0.1:8080")
+	})
 
 	// 3. 并发测试：10 个 goroutine 抢 4 个配额
 	concurrency := 10
@@ -90,7 +92,9 @@ func TestConnPool_LazyCleanup(t *testing.T) {
 	defer cleanup()
 
 	// 1. 设置极短的超时时间：100ms
-	pool := NewConnPool(2, 100*time.Millisecond)
+	pool := NewConnPool(2, 100*time.Millisecond, func() (net.Conn, error) {
+		return net.Dial("tcp", "127.0.0.1:8080")
+	})
 
 	// 2. 拿一个连接，马上还回去
 	conn1, err := pool.Get()

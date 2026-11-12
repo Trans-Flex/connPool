@@ -19,14 +19,16 @@ type ConnPool struct {
 	mu         sync.Mutex
 
 	idleTimeout time.Duration
+	dialFunc    func() (net.Conn, error)
 }
 
-func NewConnPool(maxIdle int, idleTimeout time.Duration) *ConnPool {
+func NewConnPool(maxIdle int, idleTimeout time.Duration, dialFunc func() (net.Conn, error)) *ConnPool {
 	return &ConnPool{
 		idleConns:   make(chan *idleConn, maxIdle),
 		totalConns:  0,
 		maxActive:   int32(2 * maxIdle),
 		idleTimeout: idleTimeout,
+		dialFunc:    dialFunc,
 	}
 }
 
@@ -45,7 +47,7 @@ func (p *ConnPool) Get() (net.Conn, error) {
 				p.totalConns++
 				p.mu.Unlock()
 
-				conn, err := net.Dial("tcp", "127.0.0.1:8080")
+				conn, err := p.dialFunc()
 				if err != nil {
 					p.mu.Lock()
 					p.totalConns--

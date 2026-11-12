@@ -5,6 +5,7 @@
 ## 核心特性
 
 - **并发安全**：使用 `sync.Mutex` 配合带缓冲的 `chan` 实现，通过 `go test -race` 检测。
+- **依赖注入（DialFunc）**：通过传入自定义的 `dialFunc func() (net.Conn, error)` 解耦具体的网络拨号逻辑，使其能作为通用组件无缝接入各类网关或代理项目。
 - **容量控制**：
   - `MaxIdle`：通道容量，控制最大空闲连接数。
   - `MaxActive`：全局最大连接数限制（活跃 + 空闲）。达到上限时，`Get` 请求会阻塞排队。
@@ -31,6 +32,8 @@ go test -race -v
 
 ## 后续优化
 
-- 抽离 DialFunc 参数，解耦具体的拨号逻辑。
+- 引入 Sync.Map 或分片锁，支持多目标地址（Multi-Host）的池化复用。
+
+- 增加连接数监控指标（Metrics），方便集成 Prometheus。
 
 - 引入连接池预热机制。
