@@ -1,4 +1,4 @@
-package main // 如果你的 package 是其他的，请修改这里
+package connpool // 如果你的 package 是其他的，请修改这里
 
 import (
 	"fmt"
